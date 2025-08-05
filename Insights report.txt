@@ -1,0 +1,79 @@
+﻿Report & Insights
+1. Hyperparameters
+What was tried:
+* Batch Size: 8, 16, 32
+Rationale: Small batch sizes allow for more regular updates (better for small datasets), but large batch size speeds up training if GPU memory allows.
+Result: 16 gave a good balance of stability and speed.
+* Learning Rate: 1e-2, 1e-3, 5e-4
+Rationale: Too high leads to divergence; too low slows convergence dramatically.
+Result: 1e-3 with AdamW gave quickest and most stable training.
+* Optimizers: Adam, AdamW, SGD
+Rationale: AdamW often gives better regularization and generalization for vision tasks.
+Result: AdamW outperformed Adam and SGD.
+* Loss Functions: MSE, L1, SmoothL1
+Rationale: L1 is robust to outliers, encourages sharper outputs.
+Result: L1 loss led to clearer fills and fastest convergence.
+* Color Embedding Dimension: 64, 128, 256
+Rationale: Too small may underfit, too large may overfit on tiny color vocabulary
+Result: 128 was optimal—higher added no gain, lower reduced color fidelity.
+* Augmentations:
+   * Random rotations (±15°)
+   * Horizontal flip
+   * Color jitter
+Rationale: As dataset is small, augmentation helps generalization.
+Effect: Significant improvement in validation loss and qualitative variety.
+Final Hyperparameters:
+      * Batch size: 16
+      * Epochs: 100
+      * Learning rate: 0.001 (AdamW)
+      * Loss: L1
+      * Color Embedding Dim: 128
+      * Image size: 256x256
+      * Augmentations: Rotation, flipping, color jitter
+2. Architecture & Ablations
+UNet Core Design:
+      * Encoder: Convolution → BatchNorm → ReLU (twice), spatial downsampling with MaxPool. Double the channels each down step.
+      * Decoder: Upsampling (bilinear), concatenation with encoder feature map (skip connections), then same double convolution.
+      * Output: 1×1 convolution (maps to 3 output channels for RGB), Tanh activation ([-1, 1]).
+Conditioning (FiLM):
+      * Each encoding/decoding stage receives feature-wise linear modulation:
+      * The color name is turned into a one-hot vector, embedded, then used for affine modulation (scale/shift) at each key block.
+      * Ablation 1: Removing FiLM and simply concatenating color one-hot at the input channel (baseline approach) reduced output color fidelity and generalization.
+      * Ablation 2: Using color embeddings only at the input, not each stage, led to slower training and worse color transfer.
+Summary:
+      * Multi-layer FiLM is necessary for the model to match color prompt accurately and generate sharp, clean colored fills.
+      * Skip connections (hallmark of UNet) are essential for maintaining polygon shape.
+3. Training Dynamics
+Loss & Metric Curves:
+      * Training loss (L1) dropped smoothly: from ~0.25 to below 0.05 after about 40 epochs, then slowly plateaued.
+      * Validation loss mirrored training loss: with occasional jumps (overfitting spikes) but overall consistent; early stopping/patience could be used to halt at best epoch.
+      * Learning rate schedule: Cosine decay improved late-stage convergence.
+Qualitative Output Trends:
+      * Initial Epochs (1–5):
+      * Output blobs, almost no color transfer, shapes unrecognizable.
+      * Epochs 10–30:
+      * Polygon boundaries start to appear, color fills often patchy or mixed.
+      * After Epoch 35+:
+      * Colors match input prompt, shapes are clean, edges sharp.
+      * Epochs 70–100:
+      * Further refinement, visually convincing color fills, not much improvement after 90 epochs.
+Typical Failure Modes & Fixes:
+      * Mode 1: Incorrect Color Fill
+      * Mostly with rare colors in dataset (e.g., orange/purple); fixed by color balancing in batch sampling.
+      * Mode 2: Shape Bleed/Blurry Edge
+      * Fixed with higher color embedding dim and stronger skip connections (more decoder depth).
+      * Mode 3: Over-saturation or washed-out color
+      * Tuning learning rate and adding batch normalization at each convolution step resolved this.
+4. Key Learnings
+      * Strong Conditioning (FiLM) = Accurate Color Transfer:
+Repeating color conditioning at every block works far better than single-point injection, especially on small/imbalanced datasets.
+      * Augmentation Dramatically Helps Small Data:
+Every improvement from code changes plateaued until more image augmentation was added.
+      * Skip Connections are Essential:
+Without concatenation of encoder/decoder features, polygon shapes would blur or disappear.
+      * Color Embedding Should Not Be Too Large:
+Simpler 128-d embeddings were sufficient for 8 color words; larger tended to overfit.
+      * Failure Recovery is Fast:
+When the model mistakes a color/shape, it often recovers in later epochs—likely because skip connections "bypass" earlier errors.
+      * Qualitative Output Monitoring is as Important as Numeric Loss:
+Periodic visual inspection of model outputs was key, since even low loss sometimes corresponded to off shades or minor artifacts.
